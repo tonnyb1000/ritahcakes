@@ -557,6 +557,13 @@ if ($isLoggedIn) {
         .muted { color: #777; font-size: 13px; }
         .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
         .danger { background: #b91c1c; }
+        .shape-builder { border: 1px solid #e8d9c7; border-radius: 8px; padding: 10px; background: #faf6f2; }
+        .shape-preview-stack { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 10px; }
+        .shape-illustration { display: flex; flex-direction: column; align-items: center; }
+        .shape-illustration-tier { border: 2px solid #3b6ea3; background: #5f95c8; height: 44px; }
+        .shape-price-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 10px; }
+        .shape-price-card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff; }
+        .shape-total { margin-top: 10px; font-weight: 700; }
     </style>
 </head>
 <body>
@@ -625,18 +632,25 @@ if ($isLoggedIn) {
                     <div class="grid">
                         <div>
                             <label for="cake_price_tier">Cake Size / Amount</label>
-                            <select id="cake_price_tier" name="cake_price_tier" required>
-                                <option value="">Select price tier</option>
-                                <option value="25k">25k</option>
-                                <option value="35k">35k</option>
-                                <option value="40k">40k</option>
-                                <option value="50k">50k</option>
-                                <option value="60k-with-shapes">60k with shapes</option>
-                                <option value="70k">70k</option>
-                                <option value="80k">80k</option>
-                                <option value="100k">100k</option>
-                                <option value="more">More</option>
-                            </select>
+                            <input
+                                id="cake_price_tier"
+                                name="cake_price_tier"
+                                type="text"
+                                list="cake_price_tier_options"
+                                placeholder="Select or type custom tier (e.g. 90k)"
+                                required
+                            >
+                            <datalist id="cake_price_tier_options">
+                                <option value="25k"></option>
+                                <option value="35k"></option>
+                                <option value="40k"></option>
+                                <option value="50k"></option>
+                                <option value="60k-with-shapes"></option>
+                                <option value="70k"></option>
+                                <option value="80k"></option>
+                                <option value="100k"></option>
+                                <option value="more"></option>
+                            </datalist>
                         </div>
                         <div>
                             <label for="custom_price_description">More (Custom Price Description)</label>
@@ -644,7 +658,33 @@ if ($isLoggedIn) {
                         </div>
                         <div>
                             <label for="shape_details">60k Shapes Details</label>
-                            <input id="shape_details" name="shape_details" type="text" placeholder="Describe shape details">
+                            <input id="shape_details" name="shape_details" type="hidden">
+                            <div class="shape-builder">
+                                <div class="grid">
+                                    <div>
+                                        <label for="shape_type">Shape Type</label>
+                                        <select id="shape_type">
+                                            <option value="stacked-rectangle">Stacked Rectangle</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label for="shape_count">How many shapes?</label>
+                                        <select id="shape_count">
+                                            <option value="1">1</option>
+                                            <option value="2">2</option>
+                                            <option value="3">3</option>
+                                            <option value="4">4</option>
+                                            <option value="5">5</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="shape_preview_stack" class="shape-preview-stack"></div>
+                                <div id="shape_price_grid" class="shape-price-grid"></div>
+                                <div id="shape_total" class="shape-total">Shapes Total: 0</div>
+                                <p class="muted" style="margin: 8px 0 0;">
+                                    Number of shapes means one stacked cake: smallest tier on top, bigger in middle, biggest at the bottom.
+                                </p>
+                            </div>
                         </div>
                         <div>
                             <label for="amount_to_pay">Amount to be Paid</label>
@@ -1011,5 +1051,148 @@ if ($isLoggedIn) {
             </div>
         <?php endif; ?>
     </div>
+<script>
+    (function () {
+        var shapeCountEl = document.getElementById('shape_count');
+        var shapeTypeEl = document.getElementById('shape_type');
+        var shapePreviewEl = document.getElementById('shape_preview_stack');
+        var shapePriceGridEl = document.getElementById('shape_price_grid');
+        var shapeTotalEl = document.getElementById('shape_total');
+        var shapeDetailsInputEl = document.getElementById('shape_details');
+        var amountToPayEl = document.getElementById('amount_to_pay');
+
+        if (!shapeCountEl || !shapeTypeEl || !shapePreviewEl || !shapePriceGridEl || !shapeTotalEl || !shapeDetailsInputEl) {
+            return;
+        }
+
+        function safeNumber(value) {
+            var n = parseFloat(value);
+            return Number.isFinite(n) ? n : 0;
+        }
+
+        function calculateShapesTotal() {
+            var priceInputs = shapePriceGridEl.querySelectorAll('.js-shape-price');
+            var total = 0;
+            priceInputs.forEach(function (input) {
+                total += safeNumber(input.value);
+            });
+            shapeTotalEl.textContent = 'Shapes Total: ' + total.toFixed(2);
+            return total;
+        }
+
+        function syncShapeDetails() {
+            var cards = shapePriceGridEl.querySelectorAll('.shape-price-card');
+            var details = [];
+            cards.forEach(function (card, idx) {
+                var tierSize = card.querySelector('.js-tier-size');
+                var price = card.querySelector('.js-shape-price');
+                var tierLabel = card.getAttribute('data-tier-label') || ('Tier ' + (idx + 1));
+                details.push({
+                    index: idx + 1,
+                    label: tierLabel,
+                    size: safeNumber(tierSize ? tierSize.value : ''),
+                    price: safeNumber(price ? price.value : ''),
+                });
+            });
+
+            var summary = details
+                .map(function (item) {
+                    return item.label + ' (Size=' + item.size + ', Price=' + item.price + ')';
+                })
+                .join('; ');
+
+            shapeDetailsInputEl.value = summary;
+        }
+
+        function renderShapeIllustration(size) {
+            var wrap = document.createElement('div');
+            wrap.className = 'shape-illustration';
+
+            var tierDiv = document.createElement('div');
+            tierDiv.className = 'shape-illustration-tier';
+            tierDiv.style.width = Math.max(70, size * 4) + 'px';
+
+            wrap.appendChild(tierDiv);
+            return wrap;
+        }
+
+        function renderCombinedStackPreview() {
+            var cards = shapePriceGridEl.querySelectorAll('.shape-price-card');
+            shapePreviewEl.innerHTML = '';
+
+            // Build one vertical stack from top to bottom by tier order.
+            cards.forEach(function (card) {
+                var sizeInput = card.querySelector('.js-tier-size');
+                var sizeVal = safeNumber(sizeInput ? sizeInput.value : 0);
+                shapePreviewEl.appendChild(renderShapeIllustration(sizeVal));
+            });
+        }
+
+        function renderShapesBuilder() {
+            var count = parseInt(shapeCountEl.value, 10);
+            if (!Number.isFinite(count) || count < 1) {
+                count = 1;
+            }
+
+            shapePreviewEl.innerHTML = '';
+            shapePriceGridEl.innerHTML = '';
+
+            for (var i = 1; i <= count; i += 1) {
+                var defaultSize = 20 + ((i - 1) * 10);
+                var tierLabel = 'Tier ' + i + ' (Top)';
+                if (i === count) {
+                    tierLabel = 'Tier ' + i + ' (Bottom)';
+                } else if (i > 1) {
+                    tierLabel = 'Tier ' + i + ' (Middle)';
+                }
+
+                var card = document.createElement('div');
+                card.className = 'shape-price-card';
+                card.setAttribute('data-tier-label', tierLabel);
+                card.innerHTML =
+                    '<strong>' + tierLabel + '</strong>' +
+                    '<div style="margin-top:8px;">' +
+                    '<label>Tier size</label>' +
+                    '<input class="js-tier-size" type="number" min="0" step="1" value="' + defaultSize + '">' +
+                    '</div>' +
+                    '<div style="margin-top:8px;">' +
+                    '<label>Price</label>' +
+                    '<input class="js-shape-price" type="number" min="0" step="0.01" value="0">' +
+                    '</div>';
+                shapePriceGridEl.appendChild(card);
+
+                (function bindCardEvents(cardEl) {
+                    var sizeInput = cardEl.querySelector('.js-tier-size');
+                    var priceInput = cardEl.querySelector('.js-shape-price');
+
+                    function updatePreviewAndDetails() {
+                        renderCombinedStackPreview();
+                        calculateShapesTotal();
+                        syncShapeDetails();
+                    }
+
+                    sizeInput.addEventListener('input', updatePreviewAndDetails);
+                    priceInput.addEventListener('input', function () {
+                        calculateShapesTotal();
+                        syncShapeDetails();
+                    });
+                })(card);
+            }
+
+            var shapesTotal = calculateShapesTotal();
+            syncShapeDetails();
+            renderCombinedStackPreview();
+
+            if (amountToPayEl && safeNumber(amountToPayEl.value) === 0 && shapesTotal > 0) {
+                amountToPayEl.value = shapesTotal.toFixed(2);
+            }
+        }
+
+        shapeCountEl.addEventListener('change', renderShapesBuilder);
+        shapeTypeEl.addEventListener('change', renderShapesBuilder);
+
+        renderShapesBuilder();
+    })();
+</script>
 </body>
 </html>
