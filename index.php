@@ -2,75 +2,94 @@
 declare(strict_types=1);
 session_start();
 
-$dbFile = __DIR__ . DIRECTORY_SEPARATOR . 'ritahcakes.sqlite';
-$pdo = new PDO('sqlite:' . $dbFile);
+$dbHost = getenv('DB_HOST') ?: '127.0.0.1';
+$dbPort = getenv('DB_PORT') ?: '3306';
+$dbName = getenv('DB_NAME') ?: 'ritahcakes';
+$dbUser = getenv('DB_USER') ?: 'root';
+$dbPass = getenv('DB_PASS') ?: '';
+
+$bootstrapDsn = 'mysql:host=' . $dbHost . ';port=' . $dbPort . ';charset=utf8mb4';
+$bootstrapPdo = new PDO($bootstrapDsn, $dbUser, $dbPass);
+$bootstrapPdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+$bootstrapPdo->exec('CREATE DATABASE IF NOT EXISTS `' . $dbName . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+
+$dsn = 'mysql:host=' . $dbHost . ';port=' . $dbPort . ';dbname=' . $dbName . ';charset=utf8mb4';
+$pdo = new PDO($dsn, $dbUser, $dbPass);
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
 
 $pdo->exec(
     'CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ("admin", "receptionist")),
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(100) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        role ENUM("admin", "receptionist") NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )'
 );
 
 $pdo->exec(
     'CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        cake_price_tier TEXT NOT NULL,
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        cake_price_tier VARCHAR(120) NOT NULL,
         custom_price_description TEXT DEFAULT "",
         shape_details TEXT DEFAULT "",
-        amount_to_pay REAL NOT NULL,
-        amount_paid REAL NOT NULL,
-        balance REAL NOT NULL,
-        pickup_date TEXT NOT NULL,
-        owner_name TEXT NOT NULL,
+        amount_to_pay DECIMAL(12,2) NOT NULL,
+        amount_paid DECIMAL(12,2) NOT NULL,
+        balance DECIMAL(12,2) NOT NULL,
+        pickup_date DATE NOT NULL,
+        owner_name VARCHAR(150) NOT NULL,
         cake_text TEXT DEFAULT "",
         design_color TEXT DEFAULT "",
         other_details TEXT DEFAULT "",
-        status TEXT NOT NULL DEFAULT "pending",
-        created_by_user_id INTEGER DEFAULT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        received_at TEXT DEFAULT NULL
+        status ENUM("pending", "received") NOT NULL DEFAULT "pending",
+        created_by_user_id INT DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        received_at TIMESTAMP NULL DEFAULT NULL,
+        INDEX idx_orders_status_pickup (status, pickup_date)
     )'
 );
 
 $pdo->exec(
     'CREATE TABLE IF NOT EXISTS expenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        expense_date TEXT NOT NULL,
-        category TEXT NOT NULL,
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        expense_date DATE NOT NULL,
+        category VARCHAR(120) NOT NULL,
         description TEXT DEFAULT "",
-        amount REAL NOT NULL,
-        created_by_user_id INTEGER DEFAULT NULL,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        amount DECIMAL(12,2) NOT NULL,
+        created_by_user_id INT DEFAULT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_expenses_date (expense_date)
     )'
 );
 
 /**
- * Add a missing column to an existing SQLite table.
+ * Add a missing column to an existing MySQL table.
  * This keeps older databases compatible after new releases.
  */
 function ensureColumn(PDO $pdo, string $tableName, string $columnName, string $definition): void
 {
-    $columnsStmt = $pdo->query('PRAGMA table_info(' . $tableName . ')');
-    $columns = $columnsStmt ? $columnsStmt->fetchAll() : [];
-    foreach ($columns as $column) {
-        if (isset($column['name']) && $column['name'] === $columnName) {
-            return;
-        }
+    $stmt = $pdo->prepare(
+        'SELECT COUNT(*) AS c
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = :table_name
+           AND column_name = :column_name'
+    );
+    $stmt->execute([
+        ':table_name' => $tableName,
+        ':column_name' => $columnName,
+    ]);
+    $exists = (int)$stmt->fetchColumn() > 0;
+    if ($exists) {
+        return;
     }
 
-    $pdo->exec(
-        'ALTER TABLE ' . $tableName . ' ADD COLUMN ' . $columnName . ' ' . $definition
-    );
+    $pdo->exec('ALTER TABLE `' . $tableName . '` ADD COLUMN `' . $columnName . '` ' . $definition);
 }
 
 // Backward-compatible schema upgrades for old database files.
-ensureColumn($pdo, 'orders', 'created_by_user_id', 'INTEGER DEFAULT NULL');
+ensureColumn($pdo, 'orders', 'created_by_user_id', 'INT DEFAULT NULL');
 
 // Seed requested default admin once.
 $adminUsername = 'tonnyblair';
@@ -161,7 +180,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($ownerName === '') {
                 $errors[] = 'Owner name is required.';
             }
-            if ($cakePriceTier === '60k-with-shapes' && $shapeDetails === '') {
+            if ($cakePriceTier === '60k' && $shapeDetails === '') {
                 $errors[] = 'Please provide shape details for the 60k with shapes option.';
             }
             if ($cakePriceTier === 'more' && $customPriceDescription === '') {
@@ -558,11 +577,24 @@ if ($isLoggedIn) {
         .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
         .danger { background: #b91c1c; }
         .shape-builder { border: 1px solid #e8d9c7; border-radius: 8px; padding: 10px; background: #faf6f2; }
-        .shape-preview-stack { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 10px; }
-        .shape-illustration { display: flex; flex-direction: column; align-items: center; }
-        .shape-illustration-tier { border: 2px solid #3b6ea3; background: #5f95c8; height: 44px; }
-        .shape-price-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 10px; }
-        .shape-price-card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff; }
+        .shape-workspace { display: flex; gap: 16px; align-items: flex-start; margin-top: 10px; flex-wrap: wrap; }
+        .shape-preview-stack {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+            min-width: 260px;
+            padding: 14px 8px 4px;
+        }
+        .shape-illustration {
+            position: relative;
+            width: 260px;
+            min-height: 104px;
+        }
+        .shape-iso-svg { display: block; width: 100%; height: 104px; }
+        .iso-stroke { stroke: #3f434d; stroke-width: 2; }
+        .shape-price-list { display: grid; gap: 8px; min-width: 220px; flex: 1; }
+        .shape-price-row { border: 1px solid #ddd; border-radius: 8px; padding: 8px; background: #fff; }
         .shape-total { margin-top: 10px; font-weight: 700; }
     </style>
 </head>
@@ -645,7 +677,7 @@ if ($isLoggedIn) {
                                 <option value="35k"></option>
                                 <option value="40k"></option>
                                 <option value="50k"></option>
-                                <option value="60k-with-shapes"></option>
+                                <option value="60k"></option>
                                 <option value="70k"></option>
                                 <option value="80k"></option>
                                 <option value="100k"></option>
@@ -664,7 +696,10 @@ if ($isLoggedIn) {
                                     <div>
                                         <label for="shape_type">Shape Type</label>
                                         <select id="shape_type">
-                                            <option value="stacked-rectangle">Stacked Rectangle</option>
+                                            <option value="stacked-rectangle">Rectangle Stacked</option>
+                                            <option value="circle-stacked">Circle Stacked</option>
+                                            <option value="heart-stacked">Heart-shape Stacked</option>
+                                            <option value="square-stacked">Square Stacked</option>
                                         </select>
                                     </div>
                                     <div>
@@ -678,11 +713,13 @@ if ($isLoggedIn) {
                                         </select>
                                     </div>
                                 </div>
-                                <div id="shape_preview_stack" class="shape-preview-stack"></div>
-                                <div id="shape_price_grid" class="shape-price-grid"></div>
+                                <div class="shape-workspace">
+                                    <div id="shape_preview_stack" class="shape-preview-stack"></div>
+                                    <div id="shape_price_grid" class="shape-price-list"></div>
+                                </div>
                                 <div id="shape_total" class="shape-total">Shapes Total: 0</div>
                                 <p class="muted" style="margin: 8px 0 0;">
-                                    Number of shapes means one stacked cake: smallest tier on top, bigger in middle, biggest at the bottom.
+                                    Number of shapes means one stacked cake: small top, bigger middle, biggest bottom. Add price beside each tier.
                                 </p>
                             </div>
                         </div>
@@ -1081,51 +1118,164 @@ if ($isLoggedIn) {
         }
 
         function syncShapeDetails() {
-            var cards = shapePriceGridEl.querySelectorAll('.shape-price-card');
+            var cards = shapePriceGridEl.querySelectorAll('.shape-price-row');
             var details = [];
             cards.forEach(function (card, idx) {
-                var tierSize = card.querySelector('.js-tier-size');
                 var price = card.querySelector('.js-shape-price');
                 var tierLabel = card.getAttribute('data-tier-label') || ('Tier ' + (idx + 1));
                 details.push({
                     index: idx + 1,
                     label: tierLabel,
-                    size: safeNumber(tierSize ? tierSize.value : ''),
                     price: safeNumber(price ? price.value : ''),
                 });
             });
 
             var summary = details
                 .map(function (item) {
-                    return item.label + ' (Size=' + item.size + ', Price=' + item.price + ')';
+                    return item.label + ' (Price=' + item.price + ')';
                 })
                 .join('; ');
 
-            shapeDetailsInputEl.value = summary;
+            var shapeTypeLabel = shapeTypeEl.options[shapeTypeEl.selectedIndex]
+                ? shapeTypeEl.options[shapeTypeEl.selectedIndex].text
+                : shapeTypeEl.value;
+            shapeDetailsInputEl.value = 'Shape Type: ' + shapeTypeLabel + '; ' + summary;
         }
 
-        function renderShapeIllustration(size) {
+        function renderShapeIllustration(widthPx, isTopTier) {
             var wrap = document.createElement('div');
             wrap.className = 'shape-illustration';
+            var selectedShapeType = shapeTypeEl.value;
+            var svgNs = 'http://www.w3.org/2000/svg';
+            var svg = document.createElementNS(svgNs, 'svg');
+            svg.setAttribute('class', 'shape-iso-svg');
+            svg.setAttribute('viewBox', '0 0 260 104');
 
-            var tierDiv = document.createElement('div');
-            tierDiv.className = 'shape-illustration-tier';
-            tierDiv.style.width = Math.max(70, size * 4) + 'px';
+            // Keep all tiers on one center axis.
+            var x = 130;
+            var y = 8;
+            var topW = Math.round(widthPx * 0.9);
+            // Fixed isometric depth keeps tiers centered and seated consistently.
+            var depth = 30;
+            var height = 36;
 
-            wrap.appendChild(tierDiv);
+            // Diamond top face points (isometric).
+            var topP = [
+                [x, y],
+                [x + topW / 2, y + depth],
+                [x, y + (depth * 2)],
+                [x - topW / 2, y + depth],
+            ];
+
+            // Left and right faces connect directly to the top face.
+            var leftP = [
+                topP[3],
+                topP[2],
+                [topP[2][0], topP[2][1] + height],
+                [topP[3][0], topP[3][1] + height],
+            ];
+
+            var rightP = [
+                topP[1],
+                topP[2],
+                [topP[2][0], topP[2][1] + height],
+                [topP[1][0], topP[1][1] + height],
+            ];
+
+            function pointsToString(points) {
+                return points.map(function (p) { return p[0] + ',' + p[1]; }).join(' ');
+            }
+
+            function addPolygon(points, fill) {
+                var poly = document.createElementNS(svgNs, 'polygon');
+                poly.setAttribute('points', pointsToString(points));
+                poly.setAttribute('fill', fill);
+                poly.setAttribute('class', 'iso-stroke');
+                svg.appendChild(poly);
+                return poly;
+            }
+
+            if (selectedShapeType === 'circle-stacked') {
+                var radiusX = topW / 2;
+                var radiusY = depth;
+                var topCenterY = y + depth;
+                var bottomCenterY = topCenterY + height;
+
+                // Cylinder body with curved left/right edges.
+                var bodyPath = document.createElementNS(svgNs, 'path');
+                var bodyD = [
+                    'M', (x - radiusX), topCenterY,
+                    'A', radiusX, radiusY, 0, 0, 0, (x + radiusX), topCenterY,
+                    'L', (x + radiusX), bottomCenterY,
+                    'A', radiusX, radiusY, 0, 0, 1, (x - radiusX), bottomCenterY,
+                    'Z',
+                ].join(' ');
+                bodyPath.setAttribute('d', bodyD);
+                bodyPath.setAttribute('fill', '#f29a8f');
+                bodyPath.setAttribute('class', 'iso-stroke');
+                svg.appendChild(bodyPath);
+
+                // Bottom circular edge so the base also looks rounded.
+                var bottomEllipse = document.createElementNS(svgNs, 'ellipse');
+                bottomEllipse.setAttribute('cx', String(x));
+                bottomEllipse.setAttribute('cy', String(bottomCenterY));
+                bottomEllipse.setAttribute('rx', String(radiusX));
+                bottomEllipse.setAttribute('ry', String(radiusY));
+                bottomEllipse.setAttribute('fill', '#ee8578');
+                bottomEllipse.setAttribute('class', 'iso-stroke');
+                svg.appendChild(bottomEllipse);
+
+                // Top circular face.
+                var topEllipse = document.createElementNS(svgNs, 'ellipse');
+                topEllipse.setAttribute('cx', String(x));
+                topEllipse.setAttribute('cy', String(topCenterY));
+                topEllipse.setAttribute('rx', String(radiusX));
+                topEllipse.setAttribute('ry', String(radiusY));
+                topEllipse.setAttribute('fill', '#f0b4ae');
+                topEllipse.setAttribute('class', 'iso-stroke');
+                svg.appendChild(topEllipse);
+            } else {
+                addPolygon(leftP, '#b1bbd5');
+                addPolygon(rightP, '#829dce');
+                var topFill = selectedShapeType === 'heart-stacked' ? '#e7c6cc' : '#d8dce8';
+                addPolygon(topP, topFill);
+            }
+
+            if (isTopTier) {
+                svg.style.zIndex = '3';
+            }
+
+            wrap.appendChild(svg);
             return wrap;
         }
 
-        function renderCombinedStackPreview() {
-            var cards = shapePriceGridEl.querySelectorAll('.shape-price-card');
-            shapePreviewEl.innerHTML = '';
+        function getTierWidthByPosition(position, totalCount) {
+            if (totalCount <= 1) {
+                return 160;
+            }
 
-            // Build one vertical stack from top to bottom by tier order.
-            cards.forEach(function (card) {
-                var sizeInput = card.querySelector('.js-tier-size');
-                var sizeVal = safeNumber(sizeInput ? sizeInput.value : 0);
-                shapePreviewEl.appendChild(renderShapeIllustration(sizeVal));
-            });
+            var minWidth = 110;
+            var maxWidth = 200;
+            var step = (maxWidth - minWidth) / (totalCount - 1);
+            return Math.round(minWidth + (step * position));
+        }
+
+        function renderCombinedStackPreview(totalCount) {
+            shapePreviewEl.innerHTML = '';
+            var selectedShapeType = shapeTypeEl.value;
+            var stackOverlap = 54;
+
+            for (var i = 0; i < totalCount; i += 1) {
+                var widthPx = getTierWidthByPosition(i, totalCount);
+                var tierEl = renderShapeIllustration(widthPx, i === 0);
+                tierEl.style.zIndex = String(totalCount - i);
+                if (i > 0) {
+                    tierEl.style.marginTop = '-' + stackOverlap + 'px';
+                }
+                shapePreviewEl.appendChild(tierEl);
+            }
+
+            shapePreviewEl.setAttribute('data-shape', selectedShapeType);
         }
 
         function renderShapesBuilder() {
@@ -1138,7 +1288,6 @@ if ($isLoggedIn) {
             shapePriceGridEl.innerHTML = '';
 
             for (var i = 1; i <= count; i += 1) {
-                var defaultSize = 20 + ((i - 1) * 10);
                 var tierLabel = 'Tier ' + i + ' (Top)';
                 if (i === count) {
                     tierLabel = 'Tier ' + i + ' (Bottom)';
@@ -1147,14 +1296,10 @@ if ($isLoggedIn) {
                 }
 
                 var card = document.createElement('div');
-                card.className = 'shape-price-card';
+                card.className = 'shape-price-row';
                 card.setAttribute('data-tier-label', tierLabel);
                 card.innerHTML =
                     '<strong>' + tierLabel + '</strong>' +
-                    '<div style="margin-top:8px;">' +
-                    '<label>Tier size</label>' +
-                    '<input class="js-tier-size" type="number" min="0" step="1" value="' + defaultSize + '">' +
-                    '</div>' +
                     '<div style="margin-top:8px;">' +
                     '<label>Price</label>' +
                     '<input class="js-shape-price" type="number" min="0" step="0.01" value="0">' +
@@ -1162,16 +1307,8 @@ if ($isLoggedIn) {
                 shapePriceGridEl.appendChild(card);
 
                 (function bindCardEvents(cardEl) {
-                    var sizeInput = cardEl.querySelector('.js-tier-size');
                     var priceInput = cardEl.querySelector('.js-shape-price');
 
-                    function updatePreviewAndDetails() {
-                        renderCombinedStackPreview();
-                        calculateShapesTotal();
-                        syncShapeDetails();
-                    }
-
-                    sizeInput.addEventListener('input', updatePreviewAndDetails);
                     priceInput.addEventListener('input', function () {
                         calculateShapesTotal();
                         syncShapeDetails();
@@ -1181,7 +1318,7 @@ if ($isLoggedIn) {
 
             var shapesTotal = calculateShapesTotal();
             syncShapeDetails();
-            renderCombinedStackPreview();
+            renderCombinedStackPreview(count);
 
             if (amountToPayEl && safeNumber(amountToPayEl.value) === 0 && shapesTotal > 0) {
                 amountToPayEl.value = shapesTotal.toFixed(2);
